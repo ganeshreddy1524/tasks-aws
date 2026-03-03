@@ -1,48 +1,84 @@
 # AWS Infrastructure Setup Documentation
 
-> **IMPORTANT FOR LEARNERS**
->
-> This document contains **example values** from a specific AWS deployment. **DO NOT copy these values directly.** You must replace them with your own AWS resource IDs, endpoints, and credentials when setting up your environment.
->
-> Values you MUST replace include:
-> - AWS Account ID (e.g., `<ACCOUNT-ID>`)
-> - S3 Bucket names (e.g., `task-ui-app-<ACCOUNT-ID>`)
-> - EC2 Instance IDs and Public IPs
-> - RDS Endpoints
-> - API Gateway IDs and URLs
-> - Security Group IDs
-> - Subnet IDs
-> - IAM Role ARNs
-> - Database credentials
->
-> When you create your own resources, AWS will generate unique IDs for you. Use those instead.
+## Introduction
 
----
-
-## Project Overview
-
-This document describes the complete AWS infrastructure setup for a full-stack Task Management application consisting of:
+This guide walks you through deploying a full-stack Task Management application on AWS. By the end, you'll have a working application with:
 - **Frontend**: Angular 17 application hosted on Amazon S3
 - **Backend**: Spring Boot 3.2 REST API running on Amazon EC2
 - **Database**: MySQL 8.0 on Amazon RDS
 - **File Storage**: Serverless file management using AWS Lambda, S3, and API Gateway
 
+> **Note for Learners**: This document shows example configurations. When you create resources, AWS generates unique IDs - use your own values, not the examples shown here.
+
 ---
 
 ## Table of Contents
 
-1. [Architecture Overview](#architecture-overview)
-2. [AWS Account Configuration](#aws-account-configuration)
-3. [Network Configuration](#network-configuration)
-4. [Security Groups](#security-groups)
-5. [RDS MySQL Database](#rds-mysql-database)
-6. [EC2 Instance](#ec2-instance)
-7. [S3 Static Website Hosting](#s3-static-website-hosting)
-8. [Serverless File Manager](#serverless-file-manager)
-9. [Application Deployment](#application-deployment)
-10. [API Endpoints](#api-endpoints)
-11. [Connection Details](#connection-details)
-12. [Troubleshooting](#troubleshooting)
+1. [Prerequisites](#prerequisites)
+2. [Architecture Overview](#architecture-overview)
+3. [Step-by-Step Setup Guide](#step-by-step-setup-guide)
+   - Step 1: AWS Account Setup
+   - Step 2: Create Security Groups
+   - Step 3: Create RDS Database
+   - Step 4: Launch EC2 Instance
+   - Step 5: Deploy Backend API
+   - Step 6: Create S3 Bucket for Frontend
+   - Step 7: Deploy Frontend
+   - Step 8: (Optional) Setup Serverless File Manager
+4. [Testing Your Deployment](#testing-your-deployment)
+5. [Troubleshooting](#troubleshooting)
+6. [Cleanup](#cleanup)
+7. [Reference: Resource Details](#reference-resource-details)
+
+---
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+### 1. AWS Account
+- An active AWS account ([Create one here](https://aws.amazon.com/free/))
+- IAM user with programmatic access (Access Key ID and Secret Access Key)
+
+### 2. Local Development Tools
+```bash
+# Check if these are installed
+java -version      # Java 17 or higher
+mvn -version       # Maven 3.6+
+node -version      # Node.js 18+
+npm -version       # npm 9+
+ng version         # Angular CLI 17+
+aws --version      # AWS CLI v2
+```
+
+### 3. Required IAM Permissions
+Your IAM user needs these policies attached:
+
+| Policy Name | Purpose |
+|-------------|---------|
+| `AmazonEC2FullAccess` | Create EC2 instances and security groups |
+| `AmazonRDSFullAccess` | Create RDS database |
+| `AmazonS3FullAccess` | Create S3 buckets for hosting |
+| `AmazonVPCFullAccess` | Network configuration |
+| `AWSLambda_FullAccess` | (Optional) For serverless file manager |
+| `AmazonAPIGatewayAdministrator` | (Optional) For serverless file manager |
+
+### 4. Configure AWS CLI
+```bash
+aws configure
+# Enter your:
+# - AWS Access Key ID
+# - AWS Secret Access Key
+# - Default region: us-east-1
+# - Default output format: json
+```
+
+### 5. Project Files
+Clone or download the project:
+```bash
+git clone <repository-url>
+cd tasks-aws
+```
 
 ---
 
@@ -56,223 +92,298 @@ This document describes the complete AWS infrastructure setup for a full-stack T
 │  │   S3 Bucket      │     │   EC2 Instance   │     │  RDS MySQL   │ │
 │  │  (Angular App)   │────▶│  (Spring Boot)   │────▶│  (Database)  │ │
 │  │                  │     │                  │     │              │ │
-│  │  Port: 80 (HTTP) │     │  Port: 8080      │     │  Port: 3306  │ │
+│  │  Static Website  │     │  Port: 8080      │     │  Port: 3306  │ │
 │  └──────────────────┘     └──────────────────┘     └──────────────┘ │
 │                                                                      │
+│  ┌──────────────────┐     ┌──────────────────┐     ┌──────────────┐ │
+│  │   API Gateway    │────▶│     Lambda       │────▶│  S3 Bucket   │ │
+│  │  (File API)      │     │  (File Handler)  │     │  (Files)     │ │
+│  └──────────────────┘     └──────────────────┘     └──────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
-         ▲                          ▲
-         │                          │
-         │         HTTPS            │         HTTP
-         │                          │
-    ┌─────────┐                ┌─────────┐
-    │  User   │                │  User   │
-    │ Browser │                │ (API)   │
-    └─────────┘                └─────────┘
+```
+
+**How it works:**
+1. Users access the Angular app from S3 (static website)
+2. Angular app calls the Spring Boot API on EC2
+3. Spring Boot API stores/retrieves data from RDS MySQL
+4. (Optional) File attachments are handled by Lambda + S3
+
+---
+
+## Step-by-Step Setup Guide
+
+### Step 1: AWS Account Setup
+
+#### 1.1 Get Your Account ID
+1. Log into [AWS Console](https://console.aws.amazon.com)
+2. Click your username in the top-right corner
+3. Note your **Account ID** (12-digit number)
+
+#### 1.2 Select Your Region
+1. In the top-right, select **US East (N. Virginia) us-east-1**
+2. Stay consistent with this region for all resources
+
+---
+
+### Step 2: Create Security Groups
+
+Security groups act as firewalls for your AWS resources.
+
+#### 2.1 Create EC2 Security Group
+
+**Via AWS Console:**
+1. Go to **EC2** → **Security Groups** → **Create security group**
+2. Fill in:
+   - Name: `springboot-ec2-sg`
+   - Description: `Security group for Spring Boot EC2`
+   - VPC: Select default VPC
+3. Add **Inbound Rules**:
+
+   | Type | Port | Source | Purpose |
+   |------|------|--------|---------|
+   | SSH | 22 | 0.0.0.0/0 | Remote access |
+   | Custom TCP | 8080 | 0.0.0.0/0 | API access |
+
+4. Click **Create security group**
+5. **Note the Security Group ID** (starts with `sg-`)
+
+**Via AWS CLI:**
+```bash
+# Create security group
+aws ec2 create-security-group \
+  --group-name springboot-ec2-sg \
+  --description "Security group for Spring Boot EC2"
+
+# Add SSH rule
+aws ec2 authorize-security-group-ingress \
+  --group-name springboot-ec2-sg \
+  --protocol tcp --port 22 --cidr 0.0.0.0/0
+
+# Add API rule
+aws ec2 authorize-security-group-ingress \
+  --group-name springboot-ec2-sg \
+  --protocol tcp --port 8080 --cidr 0.0.0.0/0
+```
+
+#### 2.2 Create RDS Security Group
+
+**Via AWS Console:**
+1. Go to **EC2** → **Security Groups** → **Create security group**
+2. Fill in:
+   - Name: `springboot-rds-sg`
+   - Description: `Security group for MySQL RDS`
+3. Add **Inbound Rule**:
+
+   | Type | Port | Source | Purpose |
+   |------|------|--------|---------|
+   | MySQL/Aurora | 3306 | springboot-ec2-sg | Allow EC2 to connect |
+
+4. Click **Create security group**
+
+**Via AWS CLI:**
+```bash
+# Get EC2 security group ID first
+EC2_SG_ID=$(aws ec2 describe-security-groups \
+  --group-names springboot-ec2-sg \
+  --query 'SecurityGroups[0].GroupId' --output text)
+
+# Create RDS security group
+aws ec2 create-security-group \
+  --group-name springboot-rds-sg \
+  --description "Security group for MySQL RDS"
+
+# Allow MySQL from EC2 security group
+aws ec2 authorize-security-group-ingress \
+  --group-name springboot-rds-sg \
+  --protocol tcp --port 3306 --source-group $EC2_SG_ID
 ```
 
 ---
 
-## AWS Account Configuration
+### Step 3: Create RDS Database
 
-### IAM User Details
+#### 3.1 Create DB Subnet Group
 
-| Property | Description |
-|----------|-------------|
-| Account ID | Your 12-digit AWS account ID (find in AWS Console top-right menu) |
-| IAM User | Your IAM username |
-| User ARN | `arn:aws:iam::<ACCOUNT-ID>:user/<IAM-USERNAME>` |
-| Region | `us-east-1 (N. Virginia)` or your preferred region |
+**Via AWS Console:**
+1. Go to **RDS** → **Subnet groups** → **Create DB subnet group**
+2. Fill in:
+   - Name: `springboot-db-subnet`
+   - Description: `Subnet group for Spring Boot RDS`
+   - VPC: Select default VPC
+   - Availability Zones: Select at least 2 (e.g., us-east-1a, us-east-1b)
+   - Subnets: Select subnets from each AZ
+3. Click **Create**
 
-### Required IAM Policies
+#### 3.2 Create RDS Instance
 
-The following policies must be attached to the IAM user:
+**Via AWS Console:**
+1. Go to **RDS** → **Create database**
+2. Choose:
+   - **Standard create**
+   - Engine: **MySQL**
+   - Version: **MySQL 8.0.x**
+   - Template: **Free tier**
+3. Settings:
+   - DB instance identifier: `springboot-mysql`
+   - Master username: `admin`
+   - Master password: Choose a strong password (e.g., `Admin123!`)
+4. Instance configuration:
+   - DB instance class: `db.t3.micro`
+5. Storage:
+   - Allocated storage: `20 GB`
+   - Disable storage autoscaling (for free tier)
+6. Connectivity:
+   - VPC: Default VPC
+   - DB subnet group: `springboot-db-subnet`
+   - Public access: **Yes**
+   - VPC security group: Choose existing → `springboot-rds-sg`
+7. Additional configuration:
+   - Initial database name: `taskdb`
+8. Click **Create database**
 
-| Policy Name | Purpose |
-|-------------|---------|
-| `AmazonEC2FullAccess` | Create and manage EC2 instances, security groups |
-| `AmazonRDSFullAccess` | Create and manage RDS database instances |
-| `AmazonS3FullAccess` | Create S3 buckets and host static websites |
-| `AmazonVPCFullAccess` | VPC and networking configuration |
+⏳ **Wait 5-10 minutes** for the database to be created.
 
-### Permissions Boundary
+#### 3.3 Get RDS Endpoint
 
-If a permissions boundary is applied, ensure it includes:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ec2:*",
-        "rds:*",
-        "s3:*"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
-```
-
----
-
-## Network Configuration
-
-### VPC Details
-
-| Property | Value |
-|----------|-------|
-| VPC ID | `vpc-054d7a28d11948a4f` |
-| CIDR Block | `172.31.0.0/16` |
-| Type | Default VPC |
-
-### Subnets Used
-
-| Subnet ID | Availability Zone |
-|-----------|-------------------|
-| `subnet-0197ad55cc4847070` | us-east-1a |
-| `subnet-044393f4dc42d3c93` | us-east-1b |
-| `subnet-079ecf7120b3aae84` | us-east-1c |
-| `subnet-0864bb6218b97cb4c` | us-east-1d |
-| `subnet-02e6f6021e2170901` | us-east-1e |
-| `subnet-02b557e41520628df` | us-east-1f |
+1. Go to **RDS** → **Databases** → Click on `springboot-mysql`
+2. Under **Connectivity & security**, copy the **Endpoint** (e.g., `springboot-mysql.xxxxx.us-east-1.rds.amazonaws.com`)
 
 ---
 
-## Security Groups
+### Step 4: Launch EC2 Instance
 
-### EC2 Security Group
+#### 4.1 Create Key Pair
 
-| Property | Value |
-|----------|-------|
-| Security Group ID | `sg-05a2d410a297dd07d` |
-| Name | `springboot-ec2-sg` |
-| Description | Security group for Spring Boot EC2 instance |
-
-**Inbound Rules:**
-
-| Type | Protocol | Port | Source | Purpose |
-|------|----------|------|--------|---------|
-| SSH | TCP | 22 | 0.0.0.0/0 | Remote server access |
-| Custom TCP | TCP | 8080 | 0.0.0.0/0 | Spring Boot API access |
-
-### RDS Security Group
-
-| Property | Value |
-|----------|-------|
-| Security Group ID | `sg-009ce5d8b6c50e11d` |
-| Name | `springboot-rds-sg` |
-| Description | Security group for MySQL RDS |
-
-**Inbound Rules:**
-
-| Type | Protocol | Port | Source | Purpose |
-|------|----------|------|--------|---------|
-| MySQL/Aurora | TCP | 3306 | sg-05a2d410a297dd07d | Allow EC2 to connect to RDS |
-
----
-
-## RDS MySQL Database
-
-### Instance Configuration
-
-| Property | Value |
-|----------|-------|
-| DB Instance Identifier | `springboot-mysql` |
-| Engine | MySQL 8.0 |
-| Instance Class | `db.t3.micro` (Free Tier) |
-| Storage | 20 GB (General Purpose SSD) |
-| Multi-AZ | No |
-| Publicly Accessible | Yes |
-
-### Connection Details
-
-| Property | Value |
-|----------|-------|
-| Endpoint | `springboot-mysql.cevayug0ey5k.us-east-1.rds.amazonaws.com` |
-| Port | `3306` |
-| Database Name | `taskdb` |
-| Master Username | `admin` |
-| Master Password | `Admin123!` |
-
-### DB Subnet Group
-
-| Property | Value |
-|----------|-------|
-| Name | `springboot-db-subnet` |
-| Description | Subnet group for Spring Boot RDS |
-| Subnets | `subnet-0197ad55cc4847070`, `subnet-044393f4dc42d3c93` |
-
-### JDBC Connection String
-
-```
-jdbc:mysql://springboot-mysql.cevayug0ey5k.us-east-1.rds.amazonaws.com:3306/taskdb?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
-```
-
----
-
-## EC2 Instance
-
-### Instance Configuration
-
-| Property | Value |
-|----------|-------|
-| Instance ID | `i-07de93ccfe9e3e8b6` |
-| Instance Type | `t2.micro` (Free Tier) |
-| AMI | Amazon Linux 2023 (`ami-0f3caa1cf4417e51b`) |
-| Key Pair | `springboot-key` |
-| Public IP | `44.195.1.174` |
-| Availability Zone | `us-east-1a` |
-
-### Instance Tags
-
-| Key | Value |
-|-----|-------|
-| Name | `springboot-api-server` |
-
-### User Data Script
-
-The following script was executed on instance launch:
+**Via AWS Console:**
+1. Go to **EC2** → **Key Pairs** → **Create key pair**
+2. Fill in:
+   - Name: `springboot-key`
+   - Key pair type: RSA
+   - Private key format: `.pem`
+3. Click **Create key pair**
+4. **Save the downloaded `.pem` file** securely!
 
 ```bash
-#!/bin/bash
-yum update -y
-yum install -y java-17-amazon-corretto-devel
-yum install -y mysql
+# Set correct permissions on the key file
+chmod 400 springboot-key.pem
 ```
 
-### SSH Access
+#### 4.2 Launch Instance
+
+**Via AWS Console:**
+1. Go to **EC2** → **Instances** → **Launch instances**
+2. Configure:
+   - Name: `springboot-api-server`
+   - AMI: **Amazon Linux 2023** (Free tier eligible)
+   - Instance type: `t2.micro` (Free tier eligible)
+   - Key pair: `springboot-key`
+   - Network settings:
+     - Select existing security group: `springboot-ec2-sg`
+   - Advanced details → User data (paste this script):
+     ```bash
+     #!/bin/bash
+     yum update -y
+     yum install -y java-17-amazon-corretto-devel
+     yum install -y mysql
+     ```
+3. Click **Launch instance**
+
+#### 4.3 Get EC2 Public IP
+
+1. Go to **EC2** → **Instances**
+2. Select your instance
+3. Copy the **Public IPv4 address**
+
+#### 4.4 Connect to EC2
 
 ```bash
-ssh -i springboot-key.pem ec2-user@44.195.1.174
+ssh -i springboot-key.pem ec2-user@<YOUR-EC2-PUBLIC-IP>
 ```
 
-**Key File Location:** Store your `.pem` key file in a secure location on your machine
+#### 4.5 Verify Java Installation
 
-> **Note:** Ensure the key file has proper permissions: `chmod 400 springboot-key.pem`
+```bash
+java -version
+# Should show: openjdk version "17.x.x"
+```
 
 ---
 
-## S3 Static Website Hosting
+### Step 5: Deploy Backend API
 
-### Bucket Configuration
+#### 5.1 Build the Application (on your local machine)
 
-| Property | Value |
-|----------|-------|
-| Bucket Name | `task-ui-app-<ACCOUNT-ID>` |
-| Region | `us-east-1` |
-| Website Hosting | Enabled |
-| Index Document | `index.html` |
-| Error Document | `index.html` |
-
-### Website URL
-
-```
-http://task-ui-app-<ACCOUNT-ID>.s3-website-us-east-1.amazonaws.com
+```bash
+cd task-api
+mvn clean package -DskipTests
 ```
 
-### Bucket Policy
+This creates `target/task-api-1.0.0.jar`
+
+#### 5.2 Upload to EC2
+
+```bash
+scp -i springboot-key.pem target/task-api-1.0.0.jar ec2-user@<YOUR-EC2-PUBLIC-IP>:~/
+```
+
+#### 5.3 Run the Application (on EC2)
+
+```bash
+# SSH into EC2
+ssh -i springboot-key.pem ec2-user@<YOUR-EC2-PUBLIC-IP>
+
+# Run the application
+nohup java -jar task-api-1.0.0.jar \
+  --spring.datasource.url='jdbc:mysql://<YOUR-RDS-ENDPOINT>:3306/taskdb?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC' \
+  --spring.datasource.username=admin \
+  --spring.datasource.password=<YOUR-DB-PASSWORD> \
+  > app.log 2>&1 &
+
+# Verify it's running
+curl http://localhost:8080/api/tasks
+```
+
+#### 5.4 Test API from Your Machine
+
+```bash
+curl http://<YOUR-EC2-PUBLIC-IP>:8080/api/tasks
+# Should return: [] (empty array)
+```
+
+---
+
+### Step 6: Create S3 Bucket for Frontend
+
+#### 6.1 Create Bucket
+
+**Via AWS Console:**
+1. Go to **S3** → **Create bucket**
+2. Configure:
+   - Bucket name: `task-ui-app-<YOUR-ACCOUNT-ID>` (must be globally unique)
+   - Region: `us-east-1`
+   - Uncheck **Block all public access**
+   - Acknowledge the warning
+3. Click **Create bucket**
+
+**Via AWS CLI:**
+```bash
+aws s3 mb s3://task-ui-app-<YOUR-ACCOUNT-ID> --region us-east-1
+```
+
+#### 6.2 Enable Static Website Hosting
+
+1. Click on your bucket → **Properties**
+2. Scroll to **Static website hosting** → **Edit**
+3. Enable static website hosting
+4. Index document: `index.html`
+5. Error document: `index.html`
+6. Click **Save changes**
+7. **Note the website endpoint URL**
+
+#### 6.3 Set Bucket Policy
+
+1. Go to **Permissions** → **Bucket policy** → **Edit**
+2. Paste this policy (replace `<YOUR-BUCKET-NAME>`):
 
 ```json
 {
@@ -283,123 +394,95 @@ http://task-ui-app-<ACCOUNT-ID>.s3-website-us-east-1.amazonaws.com
       "Effect": "Allow",
       "Principal": "*",
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::task-ui-app-<ACCOUNT-ID>/*"
+      "Resource": "arn:aws:s3:::<YOUR-BUCKET-NAME>/*"
     }
   ]
 }
 ```
 
-### Public Access Settings
-
-| Setting | Value |
-|---------|-------|
-| Block Public ACLs | False |
-| Ignore Public ACLs | False |
-| Block Public Policy | False |
-| Restrict Public Buckets | False |
+3. Click **Save changes**
 
 ---
 
-## Serverless File Manager
+### Step 7: Deploy Frontend
 
-The application includes a serverless file management system for task file attachments.
+#### 7.1 Update API URL
 
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          AWS Cloud (us-east-1)                       │
-│                                                                      │
-│  ┌──────────────────┐     ┌──────────────────┐     ┌──────────────┐ │
-│  │   API Gateway    │────▶│   Lambda (API)   │────▶│  S3 Bucket   │ │
-│  │                  │     │  s3-demo-api     │     │  (Files)     │ │
-│  └──────────────────┘     └──────────────────┘     └──────────────┘ │
-│                                                           │         │
-│                                                           ▼         │
-│                                                    ┌──────────────┐ │
-│                                                    │   Lambda     │ │
-│                                                    │  (Trigger)   │ │
-│                                                    │ s3-file-     │ │
-│                                                    │ processor    │ │
-│                                                    └──────────────┘ │
-└─────────────────────────────────────────────────────────────────────┘
+Edit `task-ui/src/environments/environment.prod.ts`:
+```typescript
+export const environment = {
+  production: true,
+  apiUrl: 'http://<YOUR-EC2-PUBLIC-IP>:8080'
+};
 ```
 
-### Lambda Functions
+#### 7.2 Build Angular App
 
-#### API Lambda (s3-demo-api)
-
-| Property | Value |
-|----------|-------|
-| Function Name | `s3-demo-api` |
-| Runtime | Node.js 20.x |
-| Handler | `index.handler` |
-| Memory | 256 MB |
-| Timeout | 30 seconds |
-| Role | `lambda-s3-execution-role` |
-
-**Environment Variables:**
-
-| Variable | Value |
-|----------|-------|
-| BUCKET_NAME | `lambda-s3-demo-bucket-<ACCOUNT-ID>` |
-
-#### File Processor Lambda (s3-file-processor)
-
-| Property | Value |
-|----------|-------|
-| Function Name | `s3-file-processor` |
-| Runtime | Node.js 20.x |
-| Handler | `index.handler` |
-| Memory | 128 MB |
-| Timeout | 30 seconds |
-| Trigger | S3 ObjectCreated events |
-
-### API Gateway
-
-| Property | Value |
-|----------|-------|
-| API ID | `hk327mcsu7` |
-| API Name | `s3-demo-api` |
-| Stage | `prod` |
-| Endpoint Type | Regional |
-
-**Base URL:**
-```
-https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod
+```bash
+cd task-ui
+npm install
+npm run build
 ```
 
-**Endpoints:**
+#### 7.3 Deploy to S3
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | /files | List files (supports ?taskId=X) |
-| POST | /upload | Get presigned URL for upload |
-| DELETE | /files | Delete a file |
-| GET | /logs | Get Lambda processing logs |
-
-### S3 Buckets
-
-#### Data Bucket (File Storage)
-
-| Property | Value |
-|----------|-------|
-| Bucket Name | `lambda-s3-demo-bucket-<ACCOUNT-ID>` |
-| Region | us-east-1 |
-| Versioning | Disabled |
-
-**Folder Structure:**
-```
-lambda-s3-demo-bucket-<ACCOUNT-ID>/
-├── uploads/           # Standalone file uploads
-└── tasks/             # Task-specific files
-    ├── 1/             # Files for task ID 1
-    ├── 2/             # Files for task ID 2
-    └── ...
+```bash
+aws s3 sync dist/task-ui/browser s3://<YOUR-BUCKET-NAME> --delete
 ```
 
-**CORS Configuration:**
-```json
+#### 7.4 Access Your Application
+
+Open your browser and go to:
+```
+http://<YOUR-BUCKET-NAME>.s3-website-us-east-1.amazonaws.com
+```
+
+🎉 **Congratulations!** Your application is now live!
+
+---
+
+### Step 8: (Optional) Setup Serverless File Manager
+
+This step adds file attachment capability to tasks using AWS Lambda.
+
+#### 8.1 Create IAM Role for Lambda
+
+```bash
+# Create trust policy file
+cat > trust-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "Service": "lambda.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+
+# Create role
+aws iam create-role \
+  --role-name lambda-s3-execution-role \
+  --assume-role-policy-document file://trust-policy.json
+
+# Attach policies
+aws iam attach-role-policy --role-name lambda-s3-execution-role \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+aws iam attach-role-policy --role-name lambda-s3-execution-role \
+  --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+aws iam attach-role-policy --role-name lambda-s3-execution-role \
+  --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess
+```
+
+#### 8.2 Create S3 Bucket for Files
+
+```bash
+aws s3 mb s3://lambda-s3-demo-bucket-<YOUR-ACCOUNT-ID>
+
+# Add CORS configuration
+cat > cors.json << 'EOF'
 {
   "CORSRules": [
     {
@@ -410,47 +493,263 @@ lambda-s3-demo-bucket-<ACCOUNT-ID>/
     }
   ]
 }
+EOF
+
+aws s3api put-bucket-cors \
+  --bucket lambda-s3-demo-bucket-<YOUR-ACCOUNT-ID> \
+  --cors-configuration file://cors.json
 ```
 
-#### File Manager UI Bucket
+#### 8.3 Deploy Lambda Functions
 
-| Property | Value |
-|----------|-------|
-| Bucket Name | `lambda-s3-demo-ui-<ACCOUNT-ID>` |
-| Region | us-east-1 |
-| Website Hosting | Enabled |
-| Index Document | index.html |
+```bash
+cd serverless-file-manager/api
+npm install
+zip -r ../api-function.zip index.js node_modules/
 
-**Website URL:**
+# Get role ARN
+ROLE_ARN=$(aws iam get-role --role-name lambda-s3-execution-role \
+  --query 'Role.Arn' --output text)
+
+# Create Lambda function
+aws lambda create-function \
+  --function-name s3-demo-api \
+  --runtime nodejs20.x \
+  --handler index.handler \
+  --role $ROLE_ARN \
+  --zip-file fileb://../api-function.zip \
+  --environment Variables={BUCKET_NAME=lambda-s3-demo-bucket-<YOUR-ACCOUNT-ID>} \
+  --timeout 30 \
+  --memory-size 256
 ```
-http://lambda-s3-demo-ui-<ACCOUNT-ID>.s3-website-us-east-1.amazonaws.com
+
+#### 8.4 Create API Gateway
+
+See the detailed instructions in the [Reference: Serverless File Manager](#serverless-file-manager) section below.
+
+---
+
+## Testing Your Deployment
+
+### Test Backend API
+
+```bash
+# Create a task
+curl -X POST http://<YOUR-EC2-IP>:8080/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test Task", "description": "My first task", "status": "PENDING"}'
+
+# Get all tasks
+curl http://<YOUR-EC2-IP>:8080/api/tasks
 ```
 
-### IAM Role
+### Test Frontend
 
-| Property | Value |
-|----------|-------|
-| Role Name | `lambda-s3-execution-role` |
-| Role ARN | `arn:aws:iam::<ACCOUNT-ID>:role/lambda-s3-execution-role` |
+1. Open `http://<YOUR-BUCKET-NAME>.s3-website-us-east-1.amazonaws.com`
+2. Click **+ New Task**
+3. Create a task and verify it appears in the list
 
-**Attached Policies:**
+### Test File Attachments (if configured)
 
-| Policy | Purpose |
-|--------|---------|
-| AWSLambdaBasicExecutionRole | CloudWatch Logs access |
-| AmazonS3FullAccess | S3 bucket operations |
-| CloudWatchLogsReadOnlyAccess | Read Lambda logs |
+1. Open a task in the UI
+2. Click the **Attachments** section
+3. Upload a file
+4. Verify the file appears in the list
 
-### Sample API Requests
+---
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+#### 1. "Failed to load tasks" in Frontend
+
+**Cause:** CORS error or API not reachable
+
+**Solutions:**
+- Verify EC2 security group allows port 8080
+- Check the API URL in `environment.prod.ts` matches your EC2 IP
+- Ensure Spring Boot app is running: `curl http://<EC2-IP>:8080/api/tasks`
+
+#### 2. Cannot Connect to RDS from EC2
+
+**Cause:** Security group misconfiguration
+
+**Solutions:**
+- Verify RDS security group allows MySQL (3306) from EC2 security group
+- Check RDS is in "Available" status
+- Test connection: `mysql -h <RDS-ENDPOINT> -u admin -p`
+
+#### 3. Application Won't Start on EC2
+
+**Cause:** Java not installed or wrong database credentials
+
+**Solutions:**
+```bash
+# Check Java
+java -version
+
+# Check application logs
+tail -100 app.log
+
+# Verify database connectivity
+mysql -h <RDS-ENDPOINT> -u admin -p taskdb
+```
+
+#### 4. S3 Website Returns 403 Forbidden
+
+**Cause:** Bucket policy not set or public access blocked
+
+**Solutions:**
+- Verify bucket policy allows public read
+- Check "Block public access" is disabled
+- Ensure `index.html` exists in the bucket
+
+#### 5. File Upload Fails (Serverless)
+
+**Cause:** CORS not configured on S3 bucket
+
+**Solutions:**
+```bash
+# Apply CORS configuration
+aws s3api put-bucket-cors --bucket <YOUR-BUCKET> --cors-configuration file://cors.json
+```
+
+---
+
+## Cleanup
+
+To avoid ongoing AWS charges, delete resources when done:
+
+```bash
+# 1. Empty and delete S3 buckets
+aws s3 rm s3://<YOUR-UI-BUCKET> --recursive
+aws s3 rb s3://<YOUR-UI-BUCKET>
+
+# 2. Terminate EC2 instance
+aws ec2 terminate-instances --instance-ids <YOUR-INSTANCE-ID>
+
+# 3. Delete RDS instance (takes several minutes)
+aws rds delete-db-instance --db-instance-identifier springboot-mysql --skip-final-snapshot
+
+# 4. Delete security groups (after EC2 and RDS are deleted)
+aws ec2 delete-security-group --group-name springboot-rds-sg
+aws ec2 delete-security-group --group-name springboot-ec2-sg
+
+# 5. Delete key pair
+aws ec2 delete-key-pair --key-name springboot-key
+
+# 6. (If serverless was configured) Delete Lambda and API Gateway
+aws lambda delete-function --function-name s3-demo-api
+aws apigateway delete-rest-api --rest-api-id <YOUR-API-ID>
+```
+
+---
+
+## Reference: Recommended Resource Names
+
+Use these naming conventions for your resources:
+
+| Resource | Recommended Name |
+|----------|-----------------|
+| EC2 Security Group | `springboot-ec2-sg` |
+| RDS Security Group | `springboot-rds-sg` |
+| RDS Instance | `springboot-mysql` |
+| RDS Subnet Group | `springboot-db-subnet` |
+| EC2 Instance | `springboot-api-server` |
+| EC2 Key Pair | `springboot-key` |
+| S3 UI Bucket | `task-ui-app-<YOUR-ACCOUNT-ID>` |
+| S3 Files Bucket | `lambda-s3-demo-bucket-<YOUR-ACCOUNT-ID>` |
+| Lambda Function | `s3-demo-api` |
+| IAM Role | `lambda-s3-execution-role` |
+
+---
+
+## Reference: Configuration Values
+
+### RDS Configuration
+
+| Setting | Recommended Value |
+|---------|-------------------|
+| Engine | MySQL 8.0 |
+| Instance Class | `db.t3.micro` (Free Tier) |
+| Storage | 20 GB |
+| Database Name | `taskdb` |
+| Port | 3306 |
+
+### EC2 Configuration
+
+| Setting | Recommended Value |
+|---------|-------------------|
+| Instance Type | `t2.micro` (Free Tier) |
+| AMI | Amazon Linux 2023 |
+| User Data Script | See Step 4.2 above |
+
+### JDBC Connection String Template
+
+```
+jdbc:mysql://<YOUR-RDS-ENDPOINT>:3306/taskdb?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+```
+
+### SSH Access Template
+
+```bash
+ssh -i <YOUR-KEY-FILE>.pem ec2-user@<YOUR-EC2-PUBLIC-IP>
+```
+
+> **Note:** Ensure the key file has proper permissions: `chmod 400 <YOUR-KEY-FILE>.pem`
+
+---
+
+## Reference: Serverless File Manager
+
+### File API Endpoints
+
+Once API Gateway is configured, your endpoints will be:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /files | List files (supports `?taskId=X`) |
+| POST | /upload | Get presigned URL for upload |
+| DELETE | /files | Delete a file |
+| GET | /logs | Get Lambda processing logs |
+
+### API Gateway URL Format
+
+```
+https://<YOUR-API-ID>.execute-api.<REGION>.amazonaws.com/prod
+```
+
+### Lambda Configuration
+
+| Property | Recommended Value |
+|----------|-------------------|
+| Runtime | Node.js 20.x |
+| Handler | `index.handler` |
+| Memory | 256 MB |
+| Timeout | 30 seconds |
+
+### S3 File Structure
+
+```
+<YOUR-FILES-BUCKET>/
+├── uploads/           # Standalone uploads
+└── tasks/             # Task-specific files
+    ├── 1/             # Files for task ID 1
+    ├── 2/             # Files for task ID 2
+    └── ...
+```
+
+### Sample File API Requests
 
 **List Task Files:**
 ```bash
-curl "https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod/files?taskId=1"
+curl "https://<YOUR-API-ID>.execute-api.us-east-1.amazonaws.com/prod/files?taskId=1"
 ```
 
 **Get Upload URL:**
 ```bash
-curl -X POST https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod/upload \
+curl -X POST https://<YOUR-API-ID>.execute-api.us-east-1.amazonaws.com/prod/upload \
   -H "Content-Type: application/json" \
   -d '{
     "fileName": "document.pdf",
@@ -461,7 +760,7 @@ curl -X POST https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod/upload 
 
 **Delete Task File:**
 ```bash
-curl -X DELETE https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod/files \
+curl -X DELETE https://<YOUR-API-ID>.execute-api.us-east-1.amazonaws.com/prod/files \
   -H "Content-Type: application/json" \
   -d '{
     "fileName": "document.pdf",
@@ -469,228 +768,30 @@ curl -X DELETE https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod/files
   }'
 ```
 
-### Deployment
-
-**Update API Lambda:**
-```bash
-cd serverless-file-manager/api
-npm install
-zip -r ../api-function.zip index.js node_modules/
-aws lambda update-function-code --function-name s3-demo-api --zip-file fileb://../api-function.zip
-```
-
-**Update File Processor Lambda:**
-```bash
-cd serverless-file-manager
-npm install
-zip -r function.zip index.js node_modules/
-aws lambda update-function-code --function-name s3-file-processor --zip-file fileb://function.zip
-```
-
 ---
 
-## Application Deployment
+## Reference: Task API Endpoints
 
-### Backend (Spring Boot)
-
-**Application Location on EC2:** `/home/ec2-user/task-api-1.0.0.jar`
-
-**Start Command:**
-
-```bash
-nohup java -jar task-api-1.0.0.jar \
-  --spring.datasource.url='jdbc:mysql://springboot-mysql.cevayug0ey5k.us-east-1.rds.amazonaws.com:3306/taskdb?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC' \
-  --spring.datasource.username=admin \
-  --spring.datasource.password=Admin123! \
-  > app.log 2>&1 &
+### Base URL Format
+```
+http://<YOUR-EC2-PUBLIC-IP>:8080
 ```
 
-**View Logs:**
-
-```bash
-tail -f /home/ec2-user/app.log
-```
-
-**Stop Application:**
-
-```bash
-pkill -f task-api
-```
-
-### Frontend (Angular)
-
-**Build Command:**
-
-```bash
-cd task-ui
-npm run build
-```
-
-**Deploy to S3:**
-
-```bash
-aws s3 sync dist/task-ui/browser s3://task-ui-app-<ACCOUNT-ID> --delete
-```
-
----
-
-## API Endpoints
-
-### Base URL
-
-```
-http://44.195.1.174:8080
-```
-
-### Task Endpoints
+### Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/tasks` | Get all tasks |
 | GET | `/api/tasks/{id}` | Get task by ID |
 | GET | `/api/tasks?status={status}` | Filter tasks by status |
-| GET | `/api/tasks?search={query}` | Search tasks by title |
 | POST | `/api/tasks` | Create a new task |
 | PUT | `/api/tasks/{id}` | Update an existing task |
 | DELETE | `/api/tasks/{id}` | Delete a task |
 
 ### Task Status Values
-
 - `PENDING`
 - `IN_PROGRESS`
 - `COMPLETED`
-
-### Sample API Requests
-
-**Create Task:**
-
-```bash
-curl -X POST http://44.195.1.174:8080/api/tasks \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "My New Task",
-    "description": "Task description here",
-    "status": "PENDING"
-  }'
-```
-
-**Get All Tasks:**
-
-```bash
-curl http://44.195.1.174:8080/api/tasks
-```
-
-**Filter by Status:**
-
-```bash
-curl "http://44.195.1.174:8080/api/tasks?status=COMPLETED"
-```
-
-**Update Task:**
-
-```bash
-curl -X PUT http://44.195.1.174:8080/api/tasks/1 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Updated Task",
-    "description": "Updated description",
-    "status": "COMPLETED"
-  }'
-```
-
-**Delete Task:**
-
-```bash
-curl -X DELETE http://44.195.1.174:8080/api/tasks/1
-```
-
----
-
-## Connection Details
-
-### Quick Reference
-
-> **Note:** Replace these example URLs with your own AWS resource endpoints.
-
-| Component | Example URL/Endpoint | Replace With |
-|-----------|---------------------|--------------|
-| Task Manager UI (S3) | http://task-ui-app-<ACCOUNT-ID>.s3-website-us-east-1.amazonaws.com | `http://<YOUR-BUCKET-NAME>.s3-website-<REGION>.amazonaws.com` |
-| Task API (EC2) | http://44.195.1.174:8080/api/tasks | `http://<YOUR-EC2-PUBLIC-IP>:8080/api/tasks` |
-| File API (Lambda) | https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod | `https://<YOUR-API-ID>.execute-api.<REGION>.amazonaws.com/prod` |
-| File Manager UI (S3) | http://lambda-s3-demo-ui-<ACCOUNT-ID>.s3-website-us-east-1.amazonaws.com | `http://<YOUR-UI-BUCKET>.s3-website-<REGION>.amazonaws.com` |
-| EC2 SSH | `ssh -i springboot-key.pem ec2-user@44.195.1.174` | `ssh -i <YOUR-KEY>.pem ec2-user@<YOUR-EC2-IP>` |
-| RDS Endpoint | `springboot-mysql.cevayug0ey5k.us-east-1.rds.amazonaws.com:3306` | `<YOUR-RDS-IDENTIFIER>.<ID>.<REGION>.rds.amazonaws.com:3306` |
-
-### Database Connection (from EC2)
-
-```bash
-mysql -h springboot-mysql.cevayug0ey5k.us-east-1.rds.amazonaws.com -u admin -p taskdb
-```
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-#### 1. CORS Errors
-
-If the Angular app shows "Failed to load tasks", ensure the Spring Boot API has CORS configured:
-
-```java
-@RestController
-@RequestMapping("/api/tasks")
-@CrossOrigin(origins = "*")
-public class TaskController {
-    // ...
-}
-```
-
-#### 2. EC2 Instance Not Visible in Console
-
-Ensure you're viewing the correct region: **US East (N. Virginia) us-east-1**
-
-#### 3. Cannot Connect to RDS
-
-- Verify security group allows traffic from EC2 security group
-- Check RDS is in "available" status
-- Verify credentials are correct
-
-#### 4. Application Not Starting on EC2
-
-Check logs:
-
-```bash
-ssh -i springboot-key.pem ec2-user@44.195.1.174 "tail -100 app.log"
-```
-
-#### 5. S3 Website Not Accessible
-
-- Verify bucket policy allows public read
-- Ensure public access block is disabled
-- Check index.html exists in bucket
-
-### Useful Commands
-
-**Check EC2 Instance Status:**
-
-```bash
-aws ec2 describe-instances --instance-ids i-07de93ccfe9e3e8b6 \
-  --query 'Reservations[0].Instances[0].[State.Name,PublicIpAddress]'
-```
-
-**Check RDS Status:**
-
-```bash
-aws rds describe-db-instances --db-instance-identifier springboot-mysql \
-  --query 'DBInstances[0].[DBInstanceStatus,Endpoint.Address]'
-```
-
-**List S3 Bucket Contents:**
-
-```bash
-aws s3 ls s3://task-ui-app-<ACCOUNT-ID>
-```
 
 ---
 
@@ -706,49 +807,7 @@ All resources are configured for **AWS Free Tier** eligibility:
 | Lambda | 1M requests/month, 400,000 GB-seconds |
 | API Gateway | 1M API calls/month |
 
-> **Warning:** Remember to stop/terminate resources when not in use to avoid charges.
-
----
-
-## Cleanup Instructions
-
-To delete all resources and avoid ongoing charges:
-
-```bash
-# Delete S3 buckets
-aws s3 rb s3://task-ui-app-<ACCOUNT-ID> --force
-aws s3 rb s3://lambda-s3-demo-bucket-<ACCOUNT-ID> --force
-aws s3 rb s3://lambda-s3-demo-ui-<ACCOUNT-ID> --force
-
-# Terminate EC2 instance
-aws ec2 terminate-instances --instance-ids i-07de93ccfe9e3e8b6
-
-# Delete RDS instance
-aws rds delete-db-instance --db-instance-identifier springboot-mysql --skip-final-snapshot
-
-# Delete DB subnet group (after RDS is deleted)
-aws rds delete-db-subnet-group --db-subnet-group-name springboot-db-subnet
-
-# Delete Lambda functions
-aws lambda delete-function --function-name s3-demo-api
-aws lambda delete-function --function-name s3-file-processor
-
-# Delete API Gateway
-aws apigateway delete-rest-api --rest-api-id hk327mcsu7
-
-# Delete IAM role (detach policies first)
-aws iam detach-role-policy --role-name lambda-s3-execution-role --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-aws iam detach-role-policy --role-name lambda-s3-execution-role --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
-aws iam detach-role-policy --role-name lambda-s3-execution-role --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess
-aws iam delete-role --role-name lambda-s3-execution-role
-
-# Delete security groups (after EC2 and RDS are deleted)
-aws ec2 delete-security-group --group-id sg-009ce5d8b6c50e11d
-aws ec2 delete-security-group --group-id sg-05a2d410a297dd07d
-
-# Delete key pair
-aws ec2 delete-key-pair --key-name springboot-key
-```
+> **Warning:** Remember to stop/terminate resources when not in use to avoid charges
 
 ---
 
@@ -759,10 +818,11 @@ aws ec2 delete-key-pair --key-name springboot-key
 | Created | March 3, 2026 |
 | Updated | March 3, 2026 |
 | Author | Claude Code Assistant |
-| Version | 1.1 |
+| Version | 2.0 |
 
 ### Changelog
 
+- **v2.0** - Complete restructure with step-by-step beginner guide, removed specific IDs
 - **v1.1** - Added Serverless File Manager documentation (Lambda, API Gateway, S3 file storage)
 - **v1.0** - Initial documentation (EC2, RDS, S3 static hosting)
 
