@@ -6,6 +6,7 @@ This document describes the complete AWS infrastructure setup for a full-stack T
 - **Frontend**: Angular 17 application hosted on Amazon S3
 - **Backend**: Spring Boot 3.2 REST API running on Amazon EC2
 - **Database**: MySQL 8.0 on Amazon RDS
+- **File Storage**: Serverless file management using AWS Lambda, S3, and API Gateway
 
 ---
 
@@ -18,10 +19,11 @@ This document describes the complete AWS infrastructure setup for a full-stack T
 5. [RDS MySQL Database](#rds-mysql-database)
 6. [EC2 Instance](#ec2-instance)
 7. [S3 Static Website Hosting](#s3-static-website-hosting)
-8. [Application Deployment](#application-deployment)
-9. [API Endpoints](#api-endpoints)
-10. [Connection Details](#connection-details)
-11. [Troubleshooting](#troubleshooting)
+8. [Serverless File Manager](#serverless-file-manager)
+9. [Application Deployment](#application-deployment)
+10. [API Endpoints](#api-endpoints)
+11. [Connection Details](#connection-details)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -279,6 +281,195 @@ http://task-ui-app-127246139738.s3-website-us-east-1.amazonaws.com
 
 ---
 
+## Serverless File Manager
+
+The application includes a serverless file management system for task file attachments.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          AWS Cloud (us-east-1)                       │
+│                                                                      │
+│  ┌──────────────────┐     ┌──────────────────┐     ┌──────────────┐ │
+│  │   API Gateway    │────▶│   Lambda (API)   │────▶│  S3 Bucket   │ │
+│  │                  │     │  s3-demo-api     │     │  (Files)     │ │
+│  └──────────────────┘     └──────────────────┘     └──────────────┘ │
+│                                                           │         │
+│                                                           ▼         │
+│                                                    ┌──────────────┐ │
+│                                                    │   Lambda     │ │
+│                                                    │  (Trigger)   │ │
+│                                                    │ s3-file-     │ │
+│                                                    │ processor    │ │
+│                                                    └──────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Lambda Functions
+
+#### API Lambda (s3-demo-api)
+
+| Property | Value |
+|----------|-------|
+| Function Name | `s3-demo-api` |
+| Runtime | Node.js 20.x |
+| Handler | `index.handler` |
+| Memory | 256 MB |
+| Timeout | 30 seconds |
+| Role | `lambda-s3-execution-role` |
+
+**Environment Variables:**
+
+| Variable | Value |
+|----------|-------|
+| BUCKET_NAME | `lambda-s3-demo-bucket-127246139738` |
+
+#### File Processor Lambda (s3-file-processor)
+
+| Property | Value |
+|----------|-------|
+| Function Name | `s3-file-processor` |
+| Runtime | Node.js 20.x |
+| Handler | `index.handler` |
+| Memory | 128 MB |
+| Timeout | 30 seconds |
+| Trigger | S3 ObjectCreated events |
+
+### API Gateway
+
+| Property | Value |
+|----------|-------|
+| API ID | `hk327mcsu7` |
+| API Name | `s3-demo-api` |
+| Stage | `prod` |
+| Endpoint Type | Regional |
+
+**Base URL:**
+```
+https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod
+```
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /files | List files (supports ?taskId=X) |
+| POST | /upload | Get presigned URL for upload |
+| DELETE | /files | Delete a file |
+| GET | /logs | Get Lambda processing logs |
+
+### S3 Buckets
+
+#### Data Bucket (File Storage)
+
+| Property | Value |
+|----------|-------|
+| Bucket Name | `lambda-s3-demo-bucket-127246139738` |
+| Region | us-east-1 |
+| Versioning | Disabled |
+
+**Folder Structure:**
+```
+lambda-s3-demo-bucket-127246139738/
+├── uploads/           # Standalone file uploads
+└── tasks/             # Task-specific files
+    ├── 1/             # Files for task ID 1
+    ├── 2/             # Files for task ID 2
+    └── ...
+```
+
+**CORS Configuration:**
+```json
+{
+  "CORSRules": [
+    {
+      "AllowedHeaders": ["*"],
+      "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+      "AllowedOrigins": ["*"],
+      "ExposeHeaders": ["ETag"]
+    }
+  ]
+}
+```
+
+#### File Manager UI Bucket
+
+| Property | Value |
+|----------|-------|
+| Bucket Name | `lambda-s3-demo-ui-127246139738` |
+| Region | us-east-1 |
+| Website Hosting | Enabled |
+| Index Document | index.html |
+
+**Website URL:**
+```
+http://lambda-s3-demo-ui-127246139738.s3-website-us-east-1.amazonaws.com
+```
+
+### IAM Role
+
+| Property | Value |
+|----------|-------|
+| Role Name | `lambda-s3-execution-role` |
+| Role ARN | `arn:aws:iam::127246139738:role/lambda-s3-execution-role` |
+
+**Attached Policies:**
+
+| Policy | Purpose |
+|--------|---------|
+| AWSLambdaBasicExecutionRole | CloudWatch Logs access |
+| AmazonS3FullAccess | S3 bucket operations |
+| CloudWatchLogsReadOnlyAccess | Read Lambda logs |
+
+### Sample API Requests
+
+**List Task Files:**
+```bash
+curl "https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod/files?taskId=1"
+```
+
+**Get Upload URL:**
+```bash
+curl -X POST https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod/upload \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fileName": "document.pdf",
+    "contentType": "application/pdf",
+    "taskId": 1
+  }'
+```
+
+**Delete Task File:**
+```bash
+curl -X DELETE https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod/files \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fileName": "document.pdf",
+    "taskId": 1
+  }'
+```
+
+### Deployment
+
+**Update API Lambda:**
+```bash
+cd serverless-file-manager/api
+npm install
+zip -r ../api-function.zip index.js node_modules/
+aws lambda update-function-code --function-name s3-demo-api --zip-file fileb://../api-function.zip
+```
+
+**Update File Processor Lambda:**
+```bash
+cd serverless-file-manager
+npm install
+zip -r function.zip index.js node_modules/
+aws lambda update-function-code --function-name s3-file-processor --zip-file fileb://function.zip
+```
+
+---
+
 ## Application Deployment
 
 ### Backend (Spring Boot)
@@ -402,8 +593,10 @@ curl -X DELETE http://44.195.1.174:8080/api/tasks/1
 
 | Component | URL/Endpoint |
 |-----------|--------------|
-| Frontend (S3) | http://task-ui-app-127246139738.s3-website-us-east-1.amazonaws.com |
-| Backend API | http://44.195.1.174:8080/api/tasks |
+| Task Manager UI (S3) | http://task-ui-app-127246139738.s3-website-us-east-1.amazonaws.com |
+| Task API (EC2) | http://44.195.1.174:8080/api/tasks |
+| File API (Lambda) | https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod |
+| File Manager UI (S3) | http://lambda-s3-demo-ui-127246139738.s3-website-us-east-1.amazonaws.com |
 | EC2 SSH | `ssh -i springboot-key.pem ec2-user@44.195.1.174` |
 | RDS Endpoint | `springboot-mysql.cevayug0ey5k.us-east-1.rds.amazonaws.com:3306` |
 
@@ -489,6 +682,8 @@ All resources are configured for **AWS Free Tier** eligibility:
 | EC2 (t2.micro) | 750 hours/month |
 | RDS (db.t3.micro) | 750 hours/month |
 | S3 | 5 GB storage, 20,000 GET requests |
+| Lambda | 1M requests/month, 400,000 GB-seconds |
+| API Gateway | 1M API calls/month |
 
 > **Warning:** Remember to stop/terminate resources when not in use to avoid charges.
 
@@ -499,8 +694,10 @@ All resources are configured for **AWS Free Tier** eligibility:
 To delete all resources and avoid ongoing charges:
 
 ```bash
-# Delete S3 bucket
+# Delete S3 buckets
 aws s3 rb s3://task-ui-app-127246139738 --force
+aws s3 rb s3://lambda-s3-demo-bucket-127246139738 --force
+aws s3 rb s3://lambda-s3-demo-ui-127246139738 --force
 
 # Terminate EC2 instance
 aws ec2 terminate-instances --instance-ids i-07de93ccfe9e3e8b6
@@ -510,6 +707,19 @@ aws rds delete-db-instance --db-instance-identifier springboot-mysql --skip-fina
 
 # Delete DB subnet group (after RDS is deleted)
 aws rds delete-db-subnet-group --db-subnet-group-name springboot-db-subnet
+
+# Delete Lambda functions
+aws lambda delete-function --function-name s3-demo-api
+aws lambda delete-function --function-name s3-file-processor
+
+# Delete API Gateway
+aws apigateway delete-rest-api --rest-api-id hk327mcsu7
+
+# Delete IAM role (detach policies first)
+aws iam detach-role-policy --role-name lambda-s3-execution-role --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+aws iam detach-role-policy --role-name lambda-s3-execution-role --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+aws iam detach-role-policy --role-name lambda-s3-execution-role --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess
+aws iam delete-role --role-name lambda-s3-execution-role
 
 # Delete security groups (after EC2 and RDS are deleted)
 aws ec2 delete-security-group --group-id sg-009ce5d8b6c50e11d
@@ -526,5 +736,11 @@ aws ec2 delete-key-pair --key-name springboot-key
 | Property | Value |
 |----------|-------|
 | Created | March 3, 2026 |
+| Updated | March 3, 2026 |
 | Author | Claude Code Assistant |
-| Version | 1.0 |
+| Version | 1.1 |
+
+### Changelog
+
+- **v1.1** - Added Serverless File Manager documentation (Lambda, API Gateway, S3 file storage)
+- **v1.0** - Initial documentation (EC2, RDS, S3 static hosting)
