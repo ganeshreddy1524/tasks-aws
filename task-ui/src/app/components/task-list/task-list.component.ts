@@ -2,6 +2,7 @@ import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { TaskService } from '../../services/task.service';
+import { FileService, TaskFile } from '../../services/file.service';
 import { Task, TaskStatus } from '../../models/task.model';
 import { TaskFormComponent } from '../task-form/task-form.component';
 
@@ -23,7 +24,15 @@ export class TaskListComponent implements OnInit {
   loading = false;
   error = '';
 
-  constructor(private taskService: TaskService) {}
+  // File management
+  taskFiles: Map<number, TaskFile[]> = new Map();
+  expandedTasks: Set<number> = new Set();
+  uploadingFiles: Set<number> = new Set();
+
+  constructor(
+    private taskService: TaskService,
+    private fileService: FileService
+  ) {}
 
   ngOnInit(): void {
     this.loadTasks();
@@ -132,5 +141,90 @@ export class TaskListComponent implements OnInit {
   formatDate(dateString?: string): string {
     if (!dateString) return '-';
     return new Date(dateString).toLocaleString();
+  }
+
+  // File management methods
+  toggleFiles(task: Task): void {
+    if (!task.id) return;
+
+    if (this.expandedTasks.has(task.id)) {
+      this.expandedTasks.delete(task.id);
+    } else {
+      this.expandedTasks.add(task.id);
+      this.loadTaskFiles(task.id);
+    }
+  }
+
+  isExpanded(task: Task): boolean {
+    return task.id ? this.expandedTasks.has(task.id) : false;
+  }
+
+  loadTaskFiles(taskId: number): void {
+    this.fileService.getTaskFiles(taskId).subscribe({
+      next: (response) => {
+        this.taskFiles.set(taskId, response.files);
+      },
+      error: (err) => {
+        console.error('Failed to load files for task', taskId, err);
+        this.taskFiles.set(taskId, []);
+      }
+    });
+  }
+
+  getTaskFiles(task: Task): TaskFile[] {
+    return task.id ? (this.taskFiles.get(task.id) || []) : [];
+  }
+
+  getFileCount(task: Task): number {
+    return this.getTaskFiles(task).length;
+  }
+
+  onFileSelected(event: Event, task: Task): void {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0 || !task.id) return;
+
+    const file = input.files[0];
+    this.uploadFile(task.id, file);
+    input.value = '';
+  }
+
+  uploadFile(taskId: number, file: File): void {
+    this.uploadingFiles.add(taskId);
+
+    this.fileService.uploadTaskFile(taskId, file).subscribe({
+      next: () => {
+        this.uploadingFiles.delete(taskId);
+        this.loadTaskFiles(taskId);
+      },
+      error: (err) => {
+        console.error('Failed to upload file', err);
+        this.uploadingFiles.delete(taskId);
+        this.error = 'Failed to upload file. Please try again.';
+      }
+    });
+  }
+
+  isUploading(task: Task): boolean {
+    return task.id ? this.uploadingFiles.has(task.id) : false;
+  }
+
+  deleteFile(task: Task, file: TaskFile): void {
+    if (!task.id) return;
+
+    if (confirm(`Are you sure you want to delete "${file.name}"?`)) {
+      this.fileService.deleteTaskFile(task.id, file.name).subscribe({
+        next: () => {
+          this.loadTaskFiles(task.id!);
+        },
+        error: (err) => {
+          console.error('Failed to delete file', err);
+          this.error = 'Failed to delete file. Please try again.';
+        }
+      });
+    }
+  }
+
+  formatFileSize(bytes: number): string {
+    return this.fileService.formatFileSize(bytes);
   }
 }

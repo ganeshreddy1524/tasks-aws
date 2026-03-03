@@ -40,6 +40,34 @@
       <div class="task-meta">
         <span>Created: {{ formatDate(task.createdAt) }}</span>
       </div>
+
+      <!-- File Attachments Section -->
+      <div class="file-section">
+        <div class="file-header" (click)="toggleFiles(task)">
+          <span class="file-toggle">
+            {{ isExpanded(task) ? '▼' : '▶' }} Attachments
+            <span class="file-count" *ngIf="getFileCount(task) > 0">({{ getFileCount(task) }})</span>
+          </span>
+          <label class="btn btn-sm btn-upload" (click)="$event.stopPropagation()">
+            <input type="file" hidden (change)="onFileSelected($event, task)" [disabled]="isUploading(task)">
+            {{ isUploading(task) ? 'Uploading...' : '+ Add File' }}
+          </label>
+        </div>
+
+        <div class="file-list" *ngIf="isExpanded(task)">
+          <div *ngIf="getTaskFiles(task).length === 0" class="no-files">
+            No files attached
+          </div>
+          <div class="file-item" *ngFor="let file of getTaskFiles(task)">
+            <div class="file-info">
+              <span class="file-name">{{ file.name }}</span>
+              <span class="file-size">{{ formatFileSize(file.size) }}</span>
+            </div>
+            <button class="btn btn-sm btn-danger" (click)="deleteFile(task, file)">Delete</button>
+          </div>
+        </div>
+      </div>
+
       <div class="task-actions">
         <button class="btn btn-secondary" (click)="openEditForm(task)">Edit</button>
         <button class="btn btn-danger" (click)="deleteTask(task)">Delete</button>

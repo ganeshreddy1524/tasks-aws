@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lambda S3 Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: #232f3e;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    h1 span { font-size: 32px; }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .card h2 {
+      color: #333;
+      margin-bottom: 16px;
+      font-size: 18px;
+    }
+    .upload-zone {
+      border: 2px dashed #ccc;
+      border-radius: 8px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: #ff9900;
+      background: #fff8e6;
+    }
+    .upload-zone input { display: none; }
+    .upload-zone p { color: #666; margin-bottom: 10px; }
+    .btn {
+      background: #ff9900;
+      color: white;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .btn:hover { background: #e68a00; }
+    .btn:disabled { background: #ccc; cursor: not-allowed; }
+    .btn-secondary {
+      background: #232f3e;
+    }
+    .btn-secondary:hover { background: #1a2530; }
+    .btn-danger {
+      background: #dc3545;
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+    .btn-danger:hover { background: #c82333; }
+    .file-list {
+      list-style: none;
+    }
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: #f9f9f9;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    .file-name {
+      font-weight: 500;
+      color: #333;
+    }
+    .file-meta {
+      font-size: 12px;
+      color: #888;
+    }
+    .logs-container {
+      background: #1e1e1e;
+      border-radius: 8px;
+      padding: 16px;
+      max-height: 400px;
+      overflow-y: auto;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 12px;
+    }
+    .log-entry {
+      color: #d4d4d4;
+      padding: 4px 0;
+      border-bottom: 1px solid #333;
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-time { color: #6a9955; }
+    .log-info { color: #569cd6; }
+    .log-error { color: #f14c4c; }
+    .status {
+      padding: 8px 16px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .status.success {
+      display: block;
+      background: #d4edda;
+      color: #155724;
+    }
+    .status.error {
+      display: block;
+      background: #f8d7da;
+      color: #721c24;
+    }
+    .progress {
+      height: 6px;
+      background: #e0e0e0;
+      border-radius: 3px;
+      margin-top: 16px;
+      display: none;
+    }
+    .progress.active { display: block; }
+    .progress-bar {
+      height: 100%;
+      background: #ff9900;
+      border-radius: 3px;
+      width: 0%;
+      transition: width 0.3s;
+    }
+    .header-actions {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #888;
+    }
+    .refresh-btn {
+      float: right;
+      font-size: 12px;
+      padding: 6px 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1><span>☁️</span> Lambda S3 Demo</h1>
+
+    <!-- Upload Section -->
+    <div class="card">
+      <h2>Upload File</h2>
+      <div id="status" class="status"></div>
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" multiple>
+        <p>📁 Drag & drop files here or click to browse</p>
+        <button class="btn">Select Files</button>
+      </div>
+      <div class="progress" id="progress">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+    </div>
+
+    <!-- Files Section -->
+    <div class="card">
+      <h2>
+        Uploaded Files
+        <button class="btn btn-secondary refresh-btn" onclick="loadFiles()">↻ Refresh</button>
+      </h2>
+      <ul class="file-list" id="fileList">
+        <li class="empty-state">Loading files...</li>
+      </ul>
+    </div>
+
+    <!-- Logs Section -->
+    <div class="card">
+      <h2>
+        Lambda Logs
+        <button class="btn btn-secondary refresh-btn" onclick="loadLogs()">↻ Refresh</button>
+      </h2>
+      <div class="logs-container" id="logsContainer">
+        <div class="empty-state">Loading logs...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // API Gateway URL
+    const API_URL = 'https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod';
+
+    // DOM Elements
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileList = document.getElementById('fileList');
+    const logsContainer = document.getElementById('logsContainer');
+    const status = document.getElementById('status');
+    const progress = document.getElementById('progress');
+    const progressBar = document.getElementById('progressBar');
+
+    // Upload Zone Events
+    uploadZone.addEventListener('click', () => fileInput.click());
+    uploadZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadZone.classList.add('dragover');
+    });
+    uploadZone.addEventListener('dragleave', () => {
+      uploadZone.classList.remove('dragover');
+    });
+    uploadZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove('dragover');
+      handleFiles(e.dataTransfer.files);
+    });
+    fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+
+    // Handle file upload
+    async function handleFiles(files) {
+      for (const file of files) {
+        await uploadFile(file);
+      }
+      loadFiles();
+      setTimeout(loadLogs, 2000); // Wait for Lambda to process
+    }
+
+    async function uploadFile(file) {
+      showStatus('Uploading ' + file.name + '...', 'info');
+      progress.classList.add('active');
+      progressBar.style.width = '0%';
+
+      try {
+        // Get presigned URL
+        const response = await fetch(API_URL + '/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileName: file.name,
+            contentType: file.type || 'application/octet-stream'
+          })
+        });
+
+        if (!response.ok) throw new Error('Failed to get upload URL');
+
+        const { uploadUrl } = await response.json();
+        progressBar.style.width = '30%';
+
+        // Upload file to S3
+        const uploadResponse = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+          body: file
+        });
+
+        if (!uploadResponse.ok) throw new Error('Upload failed');
+
+        progressBar.style.width = '100%';
+        showStatus('✓ ' + file.name + ' uploaded successfully!', 'success');
+
+      } catch (error) {
+        showStatus('✗ Error: ' + error.message, 'error');
+      } finally {
+        setTimeout(() => {
+          progress.classList.remove('active');
+          progressBar.style.width = '0%';
+        }, 1000);
+      }
+    }
+
+    // Delete file
+    async function deleteFile(fileName) {
+      if (!confirm(`Delete "${fileName}"?`)) return;
+
+      try {
+        const response = await fetch(API_URL + '/files', {
+          method: 'DELETE',
+          mode: 'cors',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ fileName: fileName })
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error || 'Delete failed');
+        }
+
+        showStatus('✓ ' + fileName + ' deleted successfully!', 'success');
+        loadFiles();
+
+      } catch (error) {
+        console.error('Delete error:', error);
+        showStatus('✗ Error: ' + error.message, 'error');
+      }
+    }
+
+    // Load files list
+    async function loadFiles() {
+      try {
+        const response = await fetch(API_URL + '/files');
+        const { files } = await response.json();
+
+        if (files.length === 0) {
+          fileList.innerHTML = '<li class="empty-state">No files uploaded yet</li>';
+          return;
+        }
+
+        fileList.innerHTML = files.map(file => `
+          <li class="file-item">
+            <div>
+              <div class="file-name">📄 ${escapeHtml(file.name)}</div>
+              <div class="file-meta">${formatBytes(file.size)} • ${formatDate(file.lastModified)}</div>
+            </div>
+            <button class="btn btn-danger" onclick="deleteFile('${escapeHtml(file.name)}')">Delete</button>
+          </li>
+        `).join('');
+
+      } catch (error) {
+        fileList.innerHTML = '<li class="empty-state">Error loading files</li>';
+      }
+    }
+
+    // Load Lambda logs
+    async function loadLogs() {
+      try {
+        const response = await fetch(API_URL + '/logs');
+        const { logs } = await response.json();
+
+        if (logs.length === 0) {
+          logsContainer.innerHTML = '<div class="empty-state">No logs yet</div>';
+          return;
+        }
+
+        logsContainer.innerHTML = logs.map(log => {
+          const isInfo = log.message.includes('INFO');
+          const isError = log.message.includes('ERROR');
+          const cssClass = isError ? 'log-error' : (isInfo ? 'log-info' : '');
+
+          return `<div class="log-entry ${cssClass}">
+            <span class="log-time">${log.timestamp}</span> ${escapeHtml(log.message)}
+          </div>`;
+        }).join('');
+
+      } catch (error) {
+        logsContainer.innerHTML = '<div class="empty-state">Error loading logs</div>';
+      }
+    }
+
+    // Utility functions
+    function showStatus(message, type) {
+      status.textContent = message;
+      status.className = 'status ' + type;
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function formatDate(dateStr) {
+      return new Date(dateStr).toLocaleString();
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Initial load
+    loadFiles();
+    loadLogs();
+
+    // Auto-refresh logs every 10 seconds
+    setInterval(loadLogs, 10000);
+  </script>
+</body>
+</html>

@@ -1,12 +1,13 @@
 # Task Management Application - AWS Deployment
 
-A full-stack Task Management application deployed on AWS infrastructure.
+A full-stack Task Management application deployed on AWS infrastructure with serverless file attachments.
 
 ## Architecture
 
 - **Frontend**: Angular 17 hosted on Amazon S3
 - **Backend**: Spring Boot 3.2 REST API on Amazon EC2
 - **Database**: MySQL 8.0 on Amazon RDS
+- **File Storage**: Serverless file management using AWS Lambda, S3, and API Gateway
 
 ## Project Structure
 
@@ -25,8 +26,12 @@ tasks-aws/
 │   ├── src/app/
 │   │   ├── components/          # UI Components
 │   │   ├── models/              # TypeScript Models
-│   │   └── services/            # HTTP Services
+│   │   └── services/            # HTTP Services (TaskService, FileService)
 │   └── package.json
+├── serverless-file-manager/     # Serverless File Management
+│   ├── api/                     # API Lambda (REST endpoints)
+│   ├── ui/                      # Standalone File Manager UI
+│   └── index.js                 # S3 Trigger Lambda
 ├── AWS_SETUP_DOCUMENTATION.md   # Complete AWS setup guide
 ├── userdata.sh                  # EC2 bootstrap script
 └── README.md
@@ -36,10 +41,14 @@ tasks-aws/
 
 | Component | URL |
 |-----------|-----|
-| Frontend | http://task-ui-app-127246139738.s3-website-us-east-1.amazonaws.com |
-| Backend API | http://44.195.1.174:8080/api/tasks |
+| Task Manager UI | http://task-ui-app-127246139738.s3-website-us-east-1.amazonaws.com |
+| Task API | http://44.195.1.174:8080/api/tasks |
+| File API | https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod |
+| File Manager UI | http://lambda-s3-demo-ui-127246139738.s3-website-us-east-1.amazonaws.com |
 
 ## API Endpoints
+
+### Task API (Spring Boot - EC2)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -49,6 +58,23 @@ tasks-aws/
 | POST | `/api/tasks` | Create task |
 | PUT | `/api/tasks/{id}` | Update task |
 | DELETE | `/api/tasks/{id}` | Delete task |
+
+### File API (Lambda - Serverless)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/files?taskId={id}` | List files for a task |
+| POST | `/upload` | Get presigned URL for upload |
+| DELETE | `/files` | Delete a file |
+| GET | `/logs` | Get Lambda processing logs |
+
+## Features
+
+- **Task Management**: Create, update, delete, and filter tasks by status
+- **File Attachments**: Attach files to individual tasks
+  - Files stored in S3 under `tasks/{taskId}/` folder structure
+  - Presigned URLs for secure direct-to-S3 uploads
+  - Expandable file section in each task card
 
 ## Local Development
 
@@ -96,4 +122,5 @@ See [AWS_SETUP_DOCUMENTATION.md](./AWS_SETUP_DOCUMENTATION.md) for complete infr
 - Spring Boot 3.2
 - Angular 17
 - MySQL 8.0
-- AWS EC2, RDS, S3
+- Node.js 20.x (Lambda)
+- AWS EC2, RDS, S3, Lambda, API Gateway, CloudWatch
