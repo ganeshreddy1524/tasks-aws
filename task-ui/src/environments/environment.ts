@@ -1,6 +1,6 @@
 export const environment = {
   production: false,
-  apiUrl: 'http://44.195.1.174:8080',
-  fileApiUrl: 'https://hk327mcsu7.execute-api.us-east-1.amazonaws.com/prod',
-  isLocal: false
+  apiUrl: 'http://localhost:8080',
+  fileApiUrl: 'http://localhost:8080/api/files',
+  isLocal: true
 };
